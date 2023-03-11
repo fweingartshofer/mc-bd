@@ -1,0 +1,243 @@
+= Exercise 01
+:source-highlighter: rouge
+:author: Florian Weingartshofer
+== Step 01
+
+[source,bash]
+----
+which logstash # <1>
+cd /usr/share/logstash/bin
+mkdir ~/data2 # <2>
+logstash -e 'input { stdin {} }' --path.data ~/data2 # <3>
+./logstash-plugin list --verbose | grep jdbc # <4>
+/usr/share/logstash/bin/logstash --path.settings /usr/share/logstash/config -t # <5>
+----
+
+<1> `/usr/share/logstash/bin/logstash`
+<2> Create a second data directory, since another logstash instance uses the `~/data` directory
+<3> Stdout is the default if no output is given
+<4> The plugin is called logstash-input-jdbc not logstash-integration-jdbc
+<5> OK
+
+== Step 02
+
+First the logstash_writer role has to be adapted to allow `logstash_internal` to create any index.
+For that an asterisk is added to the indices privileges.
+
+.`logstash_writer.json`
+[source,json]
+----
+include::./setup/roles/logstash_writer.json[]
+----
+
+Then install the postgres drivers.
+
+.Install Postgres Drivers
+[source,bash]
+----
+curl https://jdbc.postgresql.org/download/postgresql-42.5.4.jar -o /usr/share/logstash/logstash-core/lib/jars/postgresql-jdbc.jar
+----
+
+.Install Postgres Drivers in Docker Build
+[source,dockerfile]
+----
+include::./logstash/Dockerfile[]
+----
+
+The postgres database runs on the same network as the other services in docker.
+
+<<<
+.Postgres Database Script
+[source,sql]
+----
+include::./db.sql[]
+----
+<<<
+
+Next create a configuration to monitor the PK of all tables
+
+.`logstash.conf`
+[source]
+----
+include::./logstash/config/logstash.conf[]
+----
+
+.Run Command
+[source,bash]
+----
+/usr/share/logstash/bin/logstash --path.data data2 -e '
+include::./logstash/config/logstash.conf[]
+'
+----
+
+The run command is not necessary, since the docker compose file replaces the `logstash.conf` with our custom configuration.
+
+Next check the index of the `onlineshop` in either kibana or with curl.
+
+.cUrl Command
+[source,bash]
+----
+curl -XGET "http://localhost:9200/_search" -u elastic:changeme -H "kbn-xsrf: reporting" -H "Content-Type: application/json" -d'
+{
+  "query":{
+    "match" : {
+      "_index": "onlineshop"
+    }
+  }
+}'
+----
+
+.Output
+[source,json]
+----
+{
+  "took": 2,
+  "timed_out": false,
+  "_shards": {
+    "total": 1,
+    "successful": 1,
+    "skipped": 0,
+    "failed": 0
+  },
+  "hits": {
+    "total": {
+      "value": 10,
+      "relation": "eq"
+    },
+    "max_score": 1,
+    "hits": [
+      {
+        "_index": "onlineshop",
+        "_id": "v9yP0IYBxW10NY7sWSPi",
+        "_score": 1,
+        "_source": {
+          "@version": "1",
+          "idvisit": 7,
+          "@timestamp": "2023-03-11T12:05:00.784775863Z",
+          "timestamp": "2023-03-11T11:38:05.482856Z",
+          "user_iduser": 2,
+          "ip_address": "10.28.14.124",
+          "type": "visit"
+        }
+      },
+      {
+        "_index": "onlineshop",
+        "_id": "xdyP0IYBxW10NY7sWSPi",
+        "_score": 1,
+        "_source": {
+          "@version": "1",
+          "idvisit": 9,
+          "@timestamp": "2023-03-11T12:05:00.785846683Z",
+          "timestamp": "2023-03-11T11:38:05.482856Z",
+          "user_iduser": 2,
+          "ip_address": "10.28.14.123",
+          "type": "visit"
+        }
+      },
+      ...
+    ]
+  }
+}
+----
+
+=== Mongo Pipelines and Logstash Comparison
+==== Mongo Import
+Mongo Import is a tool that is specifically built to import data into Mongo.
+It's a CLI tool, which means it runs in a shell.
+It is primarily used to import JSON, CSV and other structured data into Mongo.
+It can import big datasets into Mongo, but cannot be scaled horizontally, i.e. run on multiple nodes.
+
+==== Logstash
+Logstash is a data processing pipeline tool, it can be scaled out to multiple nodes.
+It supports transformation, and can ingest data from multiple sources, such as mongo, RDBMS or even STDIN.
+It can export data to multiple systems, such as elastic search.
+
+==== Conclusion
+In summary, mongoimport is a tool specifically designed for importing data into Mongo, while Logstash is a more generic data pipeline tool that can be used for various data processing and transformation needs.
+Mongoimport is simpler and more straightforward, while Logstash provides more flexibility and scalability.
+
+
+== Step 3
+Configure Metricbeat described in the documentation.
+
+One change is necessary on my machine, since I run docker in rootless mode.
+The `docker.sock` will be created at a different location.
+
+.Rootless Mode `metric-beat.yml`
+[source,yml]
+----
+# <1>
+include::./extensions/metricbeat/metricbeat-compose.yml[lines=36..39]
+----
+<1> Lines 36 to 39
+
+Now run the docker-compose files and check elasticsearch with the following command.
+Since the index created by beats is not called logstash, I cannot use that index.
+
+.Check Metricbeat Ingests
+[source,bash]
+----
+curl -u elastic:changeme http://localhost:9200/_search
+----
+
+The output for this command is too long to add it to the documentation
+
+.Find entries with a specific index
+[source,bash]
+----
+curl -XGET "http://localhost:9200/_search" -u elastic:changeme -H "kbn-xsrf: reporting" -H "Content-Type: application/json" -d'
+{
+  "query":{
+    "match": {
+      "_index": ".ds-.monitoring-es-8-mb-2023.03.11-000001"
+    }
+  }
+}' | jq
+----
+
+Finding no entries by using the index of the following day.
+
+.Find no entries
+[source,bash]
+----
+curl -XGET "http://localhost:9200/_search" -u elastic:changeme -H "kbn-xsrf: reporting" -H "Content-Type: application/json" -d'
+{
+  "query":{
+    "match": {
+      "_index": ".ds-.monitoring-es-8-mb-2023.03.12-000001"
+    }
+  }
+}'
+----
+
+And sorting by using the index, since no specific field was specified.
+Again the output will be too long to print in the documentation.
+
+.Sorting ascending
+[source,bash]
+----
+curl -XGET "http://localhost:9200/_search" -u elastic:changeme -H "kbn-xsrf: reporting" -H "Content-Type: application/json" -d'
+{
+  "query":{
+    "match_all": {}
+
+  },
+  "sort": {
+    "_index" : "asc"
+  }
+}'
+----
+
+.Sorting descending
+[source,bash]
+----
+curl -XGET "http://localhost:9200/_search" -u elastic:changeme -H "kbn-xsrf: reporting" -H "Content-Type: application/json" -d'
+{
+  "query":{
+    "match_all": {}
+  },
+  "sort": {
+    "_index" : "desc"
+  }
+}'
+----
