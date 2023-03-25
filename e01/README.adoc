@@ -1,6 +1,8 @@
 = Exercise 01
 :source-highlighter: rouge
 :author: Florian Weingartshofer
+:rouge-style: github
+
 == Step 01
 
 [source,bash]
@@ -19,7 +21,9 @@ logstash -e 'input { stdin {} }' --path.data ~/data2 # <3>
 <4> The plugin is called logstash-input-jdbc not logstash-integration-jdbc
 <5> OK
 
+<<<
 == Step 02
+=== Adapt Logstash Roles
 
 First the logstash_writer role has to be adapted to allow `logstash_internal` to create any index.
 For that an asterisk is added to the indices privileges.
@@ -30,7 +34,11 @@ For that an asterisk is added to the indices privileges.
 include::./setup/roles/logstash_writer.json[]
 ----
 
+<<<
+=== Adapt the Logstash Dockerfile
+
 Then install the postgres drivers.
+This can be either be done manually each time or via the dockerfile
 
 .Install Postgres Drivers
 [source,bash]
@@ -44,7 +52,21 @@ curl https://jdbc.postgresql.org/download/postgresql-42.5.4.jar -o /usr/share/lo
 include::./logstash/Dockerfile[]
 ----
 
-The postgres database runs on the same network as the other services in docker.
+<<<
+=== Adapt the Docker Compose File
+
+The postgres database runs on the same network as the other services in docker, since it was added to the docker-compose file.
+Furthermore, an initialization script was added to initialize the database when the postgres container is started.
+This automates the whole process of provisioning postgres.
+
+.New `docker-compose.yml`
+[source,yml]
+----
+services:
+# ELK Stuff ...
+# Postgres ...
+include::./docker-compose.yml[lines=89..112]
+----
 
 <<<
 .Postgres Database Script
@@ -52,9 +74,11 @@ The postgres database runs on the same network as the other services in docker.
 ----
 include::./db.sql[]
 ----
-<<<
 
-Next create a configuration to monitor the PK of all tables
+<<<
+=== Create the Logstash Pipeline for Postgres
+Next create a configuration to monitor the PK of all tables.
+Each primary key has to be tracked separately, sof for columns with a compound key, there are two inputs defined.
 
 .`logstash.conf`
 [source]
@@ -72,9 +96,27 @@ include::./logstash/config/logstash.conf[]
 
 The run command is not necessary, since the docker compose file replaces the `logstash.conf` with our custom configuration.
 
-Next check the index of the `onlineshop` in either kibana or with curl.
+<<<
+.Our trusty `docker-compose.yml`
+[source,yml]
+----
+services:
+    #ELK Stuff...
+include::./docker-compose.yml[lines=49..70]
+    #Postgres, Volumes and Networking Stuff...
+----
 
-.cUrl Command
+<<<
+=== Running Everything
+
+First start docker:
+[source,bash]
+docker compose -f docker-compose.yml up -d
+
+Then we can check if logstash did its job.
+We do that by either checking the index of the `onlineshop` in either kibana or with curl.
+
+.curl Command
 [source,bash]
 ----
 curl -XGET "http://localhost:9200/_search" -u elastic:changeme -H "kbn-xsrf: reporting" -H "Content-Type: application/json" -d'
@@ -156,21 +198,24 @@ It can export data to multiple systems, such as elastic search.
 In summary, mongoimport is a tool specifically designed for importing data into Mongo, while Logstash is a more generic data pipeline tool that can be used for various data processing and transformation needs.
 Mongoimport is simpler and more straightforward, while Logstash provides more flexibility and scalability.
 
-
+<<<
 == Step 3
+=== Setup
 Configure Metricbeat described in the documentation.
 
 One change is necessary on my machine, since I run docker in rootless mode.
 The `docker.sock` will be created at a different location.
 
-.Rootless Mode `metric-beat.yml`
+.Rootless Mode `metricbeat-compose.yml`
 [source,yml]
 ----
 # <1>
 include::./extensions/metricbeat/metricbeat-compose.yml[lines=36..39]
 ----
-<1> Lines 36 to 39
+<1> Lines 36 to 39 in `metricbeat-compose.yml`
 
+<<<
+=== Running Metric Beat
 Now run the docker-compose files and check elasticsearch with the following command.
 Since the index created by beats is not called logstash, I cannot use that index.
 
